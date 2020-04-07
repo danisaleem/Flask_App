@@ -2,28 +2,23 @@ from flask import render_template, flash, redirect, url_for, request
 from flask_login import login_user, logout_user, current_user, login_required
 from werkzeug.urls import url_parse
 from app import app, db
-from app.forms import LoginForm, RegistrationForm, EditProfileForm
+from app.forms import LoginForm, RegistrationForm, EditProfileForm, PostForm
 from app.models import User, Post
 from sqlalchemy import table, select, column
 from datetime import datetime
 
 
-@app.route('/')
-@app.route('/index')
+@app.route('/', methods=['GET', 'POST'])
+@app.route('/index', methods=['GET', 'POST'])
 @login_required
 def index():
-    # user = User.query.filter_by(username=current_user.username).first()
-    P = Post.query.all()
-    posts = []
-    for i in P:
-        u=User.query.filter_by(id=i.user_id).first()
-        posts.append(
-            {
-                'author': {'username': u.username},
-                'body': i.body
-            }
-        )
-        
+    form = PostForm()
+    if form.validate_on_submit():
+        post = Post(body=form.post.data, author=current_user)
+        db.session.add(post)
+        db.session.commit()
+        flash('Your post is now live!')
+        return redirect(url_for('index'))
     # posts = [
     #     {
     #         'author': {'username': 'John'},
@@ -34,7 +29,43 @@ def index():
     #         'body': 'The Avengers movie was so cool!'
     #     }
     # ]
-    return render_template('index.html', title='Home', posts=posts)
+###########################################################
+    # P = Post.query\
+    #     .join(User, User.id==Post.user_id)\
+    #         .add_columns(Post.id, Post.body, Post.timestamp, User.id, User.username)\
+    #             .order_by(Post.timestamp.desc())
+    # posts = []
+    # for i in P:
+    #     # u=User.query.filter_by(id=i.user_id).first()
+    #     posts.append(
+    #         {
+    #             'author': {'username': i.username},
+    #             'body': i.body
+    #         }
+    #     )
+###########################################################
+  
+# --The paginate method can be called on any query object from Flask-SQLAlchemy. It takes three arguments:
+# --the page number, starting from 1
+# --the number of items per page
+# --an error flag. If True, when an out of range page is requested a 404 error will be automatically 
+#       returned to the client. If False, an empty list will be returned for out of range pages.
+# --has_next: True if there is at least one more page after the current one
+# --has_prev: True if there is at least one more page before the current one
+# --next_num: page number for the next page
+# --prev_num: page number for the previous page
+
+# getting page no form url query string
+    page = request.args.get('page', 1, type=int)
+    posts = current_user.followed_posts().paginate(
+        page, app.config['POSTS_PER_PAGE'], False)
+    next_url = url_for('index', page=posts.next_num) \
+        if posts.has_next else None
+    prev_url = url_for('index', page=posts.prev_num) \
+        if posts.has_prev else None
+    return render_template('index.html', title='Home', form=form,
+                           posts=posts.items, next_url=next_url,
+                           prev_url=prev_url)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -78,21 +109,15 @@ def register():
 @login_required
 def user(username):
     user = User.query.filter_by(username=username).first_or_404()
-    P = Post.query.filter_by(user_id=user.id).all()
-    posts = []
-    for i in P:
-        # u=User.query.filter_by(id=i.user_id).first()
-        posts.append(
-            {
-                'author': user,
-                'body': i.body
-            }
-        )
-    # posts = [
-    #     {'author': user, 'body': 'Test post #1'},
-    #     {'author': user, 'body': 'Test post #2'}
-    # ]
-    return render_template('user.html', user=user, posts=posts)
+    page = request.args.get('page', 1, type=int)
+    posts = user.posts.order_by(Post.timestamp.desc()).paginate(
+        page, app.config['POSTS_PER_PAGE'], False)
+    next_url = url_for('user', username=user.username, page=posts.next_num) \
+        if posts.has_next else None
+    prev_url = url_for('user', username=user.username, page=posts.prev_num) \
+        if posts.has_prev else None
+    return render_template('user.html', user=user, posts=posts.items,
+                           next_url=next_url, prev_url=prev_url)
 
 @app.before_request
 def before_request():
@@ -145,3 +170,16 @@ def unfollow(username):
     db.session.commit()
     flash('You are not following {}.'.format(username))
     return redirect(url_for('user', username=username))
+
+@app.route('/explore')
+@login_required
+def explore():
+    page = request.args.get('page', 1, type=int)
+    posts = Post.query.order_by(Post.timestamp.desc()).paginate(
+        page, app.config['POSTS_PER_PAGE'], False)
+    next_url = url_for('explore', page=posts.next_num) \
+        if posts.has_next else None
+    prev_url = url_for('explore', page=posts.prev_num) \
+        if posts.has_prev else None
+    return render_template("index.html", title='Explore', posts=posts.items,
+                          next_url=next_url, prev_url=prev_url)
